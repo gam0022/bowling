@@ -1,0 +1,491 @@
+;===========================================================
+;												2009/12/26
+;	ボウリング(笑) 1.6
+;	http://gmr.blog.shinobi.jp/Category/38/
+;												GAM-22
+;===========================================================
+
+	; obaq
+	#include "obaq.as"
+
+	; hsptv
+	#runtime "hsptv"
+	#regcmd 18
+	#cmd hsptv_send 0
+	notesel rank
+	hsptv_send rank, -1
+
+	; font
+	ComicSans = "Comic Sans MS"
+
+;-----------------------------------------------------------
+;	graphic
+;-----------------------------------------------------------
+
+	buffer 1 : boxf
+	celdiv ,64,64,32,32
+
+	; ball
+	palcolor 14
+	circle ,, 63,63
+
+	; pin
+	gradf 64,0, 128,64, 0, $eeeeee,$666666
+
+	; block
+	gradf 128,0, 256,64, 1, $ff0000,$aa0000
+
+	; square
+	gradf 384,0, 128,64, 1, $88ff11,$222222
+
+	gsel; 0
+
+;-----------------------------------------------------------
+;	definition
+;-----------------------------------------------------------
+
+	; basic
+	#const basic_w 640/4
+	#const basic_h 480/4
+
+	; boder
+	#const margin 6
+	#const boder_w  basic_w*5
+	#const boder_h  basic_h*2 -margin*2
+	#const boder_w2 boder_w -80
+	#const boder_h2 boder_h -60
+	#const boder_w3 boder_w +margin
+	#const boder_h3 boder_h +margin
+	#const boder_hf boder_h +margin*2
+
+	; cloud 間隔
+	#const cloud_spx basic_w/4
+	#const cloud_spy basic_h/4
+	; 初期スクロール(EDIT MODE)
+	#const desx -basic_w*5
+	#const desy 12
+	; 初期スクロール(PLAY MODE)
+	#const desx2 170
+	#const desy2 -boder_h*4+480-24
+	; 初期ボール座標
+	#const demx 16
+	#const demy boder_h-15
+
+	; 隠しブロック (line 429)
+	; +$10 : x軸を固定
+	; +$20 : y軸を固定
+	; +$30 : 座標を固定(回転ブロック)
+	; +$40 : 回転を固定
+	; +$50 : x軸と回転を固定
+	; +$60 : y軸と回転を固定
+	; +$70 : 物理挙動なし
+
+;-----------------------------------------------------------
+;	starting
+;-----------------------------------------------------------
+
+	pos 16,352
+	objsize 112,52, 60
+	objmode 2
+	font ComicSans
+	button "PLAY", *change : hplay = objinfo(0, 2)
+	button "EDIT", *change
+	objsize
+
+	noteget stage, 2
+
+*reset
+;-----------------------------------------------------------
+;	reset
+;-----------------------------------------------------------
+
+	// reset a obaq
+	qreset
+	qborder -80,-60,boder_w2,boder_h2
+
+	// default
+	dim mcnt
+	dim block_max
+	dim pin
+	ball = 5
+
+	sx = desx
+	sy = desy
+	zoom = 2.0
+
+	mx = 560
+
+	// load
+	repeat strlen(stage)/3
+		v1 = cnt*3
+		type = peek(stage,v1)
+		x = peek(stage,v1+1)
+		y = peek(stage,v1+2)
+		gosub *make_block
+	loop
+
+*main
+
+;-----------------------------------------------------------
+;	common
+;-----------------------------------------------------------
+
+;	変数modeの説明。
+;	1:EDIT、2:PLAY。組み合わせ可能。
+
+	click_log = click
+	getkey click
+	; 離したとき
+	;click_up = (click=0)&(click_log)
+	; 押したとき
+	click_down = (click)*(click_log=0)
+
+	; オブジェクト上でもマウス座標を取得。
+	; EDIT MODEで、マウスを速く動かして[PLAY]押したとき、不本意にブロック作るの防止策。
+	mousex_ = ginfo(0) - ginfo(4)
+	mousey_ = ginfo(1) - ginfo(5)
+
+if mode&2 {
+;-----------------------------------------------------------
+;	PLAY MODE
+;-----------------------------------------------------------
+
+	if mcnt<=60 {
+		// スタート時の、自動スクロール
+		mx -= sin(0.000872664626*mcnt*mcnt)*19
+		my = demy
+	} else {
+		mx_log = mx
+		my_log = my
+		qgetpos m, mx,my,mr
+	}
+
+	if threw=1 | mcnt<=60 {
+		// カメラ移動
+		zoom = limitf(4.0*(800-mx)/750, 2, 4)
+		sx = limitf(320.0-zoom*mx, 640.0-zoom*boder_w3,desx2)
+		sy = limitf(240.0-zoom*my, 480.0-zoom*boder_h3,6*zoom)
+
+		; ボール移動が負になったら、カメラ停止
+		threw += mx<=mx_log
+	}
+
+	if threw:else {
+		// 投げる前
+		if click {
+			qcnvaxis x,y, mousex_,mousey_, 1
+
+			if click_log:else {
+				qinner v1, x,y;, m
+				// つかむ
+				hold += v1=m
+			}
+
+			if hold {
+				// つかんだ状態
+				qpos m, x,y;, mr
+			}
+
+		} else {
+			if click_log*hold {
+				// 投げる瞬間
+				x = mx-mx_log
+				y = my-my_log
+
+				; speed
+				v1 = sqrt(x*x + y*y)
+				k = 0.1
+				if v1>30 : k /= v1/30
+				qspeed m, k*x, k*y
+
+				dim hold
+			}
+		}
+
+		; ボールのx座標が画面外なら、投げたことに
+		threw += mx>=125
+	}
+
+	if threw*click_down*(mcnt>60) | (mcnt=60) {
+		// 新しいボール
+		qaddpoly m, 15, demx,demy,, 8,8,0, 2
+		if m>=0 {
+			sx = desx2
+			sy = desy2
+			zoom = 4.0
+
+			dim hold
+			dim threw
+			ball --
+
+			qweight m,2
+			qmat m, mat_spr, 1;,0
+		}
+	}
+
+	dim laid
+	repeat block_max, 1
+		qgetuser cnt, v1,x,y
+		qgetpos cnt, x,y,r
+		// 倒した判定
+		; sin<=0.5だから、床からの角度が30度で倒したことに。
+		; if v1=1 : laid += sin(r+m_pi/2)<=0.5
+		laid += (cos(r)<=0.5)*(v1=1)
+	loop
+
+	; sendmsg hwnd, $F5
+	; で、ボタンを押したことになり、ラベルへも飛べる。
+
+	if (laid>=pin) * pin {
+		dialog "おめでとう"
+
+		if mode=3 {
+			dialog "投稿する?",2
+			if stat=6{
+				// 投稿
+				noteget v1
+				hsptv_send rank, 1+v1, stage
+				mode ^= 1
+			}
+		}
+
+		sendmsg hplay, $F5
+	}
+
+	if ball<0 {
+		dialog "ドンマイ"
+		sendmsg hplay, $F5
+	}
+
+	// 物理計算は、obaqに下請け
+	qexec
+}
+
+;-----------------------------------------------------------
+;	draw
+;-----------------------------------------------------------
+
+	redraw 0
+
+	// background
+	qcnvaxis x,y, ,-6
+	gradf 0,y, 640,zoom*boder_hf, 1, $eeeeff,$6666dd
+
+	// cloud
+	repeat 182
+		font ComicSans,zoom*10
+		palcolor 10
+		pos zoom*cloud_spx*(cnt\13-2)+(sx\(zoom*cloud_spx)), zoom*cloud_spy*(cnt/13-2)+(sy\(zoom*cloud_spy))
+		mes " cloud"
+	loop
+
+	qview zoom,zoom, sx,sy
+	qdraw
+
+;-----------------------------------------------------------
+;	TITLE
+;-----------------------------------------------------------
+
+	gradf 8,8, 128,464, 0, $111111,$999999
+	pos 13,10 : font ComicSans, 24
+	palcolor 10 : mes "bowling(w)"
+
+	palcolor 17
+	font ComicSans, 15
+	pos 18,60
+
+	if mode:else {
+	;-------------------------------------------------------
+	;	STAGE SELECT MODE
+	;-------------------------------------------------------
+
+		; 変数selectは、最新のステージが7になる
+		select = mousey_/9
+		if select>=7 & select<=36 & mousex_<=125 {
+			boxf 18,select*9, 125,select*9+8
+			if click_down {
+				; noteget stage, select*3+2-3*7
+				noteget stage, select*3-19
+				goto *reset
+			}
+		}
+		palcolor 10 : font "", 11
+		repeat 30
+			noteget v1,cnt*3
+			noteget v2,cnt*3+1
+			pos 20,cnt*9+63
+			mes strf("#%03d "+v2,v1)
+		loop
+
+	}
+
+	if mode=1 {
+	;-------------------------------------------------------
+	;	EDIT MODE
+	;-------------------------------------------------------
+
+		mes "block "+block_max+"/85"
+		gosub *get_block
+		; block of menu
+		pos 72,152 : gosub *draw_block
+		; block of cursor
+		pos mousex_/12*12+6,mousey_/12*12+6
+		gosub *draw_block
+
+		;	ステージは、幅41縦38マス。
+		;	左上が(65,65)なのは、'&'(38)を踏まないため。
+
+		;	画面上の左上座標は(144,12)。
+		;	画面上のブロックの一辺は12dotだが、640/12は割り切れないという設計ミス。
+		;	だから、右端が中途半端に4dot余っているotz。
+
+		if click_down {
+			;x = (mousex_-144)/12+65
+			x = mousex_/12+53
+			;y = (mousey_-12)/12+65
+			y = mousey_/12+64
+
+			if x>=65 & y>=65 & x<=105 & y<=102 {
+				gosub *make_block
+			}
+			if x>=54 & y>=71 & x<=63 & y<=91 {
+				type = (type\6)+1
+			}
+		}
+	}
+
+	if mode&2 {
+	;-------------------------------------------------------
+	;	PLAY MODE
+	;-------------------------------------------------------
+
+		mes "pin "+laid+"/"+pin
+		mes "ball "+ball
+
+	} else {
+	;-------------------------------------------------------
+	;	save/load a file
+	;-------------------------------------------------------
+
+		getkey Skey, 'S'
+		if Skey {
+			// save
+			dialog "bow", 17
+			if stat {
+				gosub *save
+				bsave getpath(refstr,1)+".bow", stage
+			}
+		}
+
+		getkey Lkey, 'L'
+		if Lkey {
+			// load
+			dialog "bow", 16
+			if stat {
+				sdim stage,256
+				bload refstr, stage
+				goto *reset
+			}
+		}
+	}
+
+	redraw
+
+	/*
+	stick key
+	if key&16 : bmpsave "hoge.bmp"
+	*/
+
+	await 10
+	mcnt ++
+
+	goto *main
+
+*make_block
+	// make a block
+
+	qcnvaxis x2,y2,mousex_,mousey_,1
+	qinner v1,x2,y2
+
+	if v1>=0 {
+		// del
+		; ブロックの上にカーソルがあったら、削除。
+		block_max--
+		qdel v1
+	} else {
+		if block_max>=85 {
+			dialog "85個までだよ"
+			return
+		}
+		// add
+		block_max++
+		pin += type=1
+		gosub *get_block
+		;qaddpoly block, 4, x*6-desx/2+144/2-6*65+3,y*6-6*65+3,, w,h, 0
+		qaddpoly block, 4, x*6+85,y*6-387,, w,h, 0
+		; ピンはブロックより倒しやすい。
+		qweight block, 7, 120000+8800*(ltype>=2)
+		qmat block, mat_spr, 1,ltype
+		qtype block, type_bind*(ltype=6) | $40*(type/$10)
+		quser block, type,x,y
+	}
+	return
+
+*get_block
+	ltype = type\16
+	// ブロックの大きさを取得
+	w = 4 : h = 21.4
+	if ltype=2 : h+=17
+	if ltype>=4 : h=4.3
+	if ltype=4 : w = 38
+	if ltype=5 : w = 21
+	return
+
+*draw_block
+	// draw a block
+	celput ,ltype, 0.045*w,h/23
+	return
+
+*change
+	// ボタンの動作を制御
+
+	; [PLAY]と[EDIT]のオンオフ
+	; mode ^= 2*(stat=0) +1*(stat=1)
+	mode ^= 2*(stat=0) +stat
+
+	if stat {
+		sdim stage
+	} else {
+		gosub *save
+	}
+
+	; DEFPUSHボタンで、擬似的にトグルボタンを再現。
+	; 本当にトグルボタン化すると、on/offの管理が面倒なのと、
+	; SetWindowLongを使わないので、容量削減になる。
+	sendmsg hplay, $f4, mode>>1
+	sendmsg objinfo(1, 2), $f4, mode&1
+
+	; PLAYモードなら、[EDIT]使用不可
+	; objenable 1, (mode&2)!2
+	objenable 1, mode<=1
+
+	goto *reset
+
+*save
+	sdim stage,256
+
+	qfind 1
+	; repeat block_max で検索すると、	
+	; EDITで、ブロックをdeleteした後だと、バグる。
+	repeat
+		// save
+		qnext v2
+		if v2<0 : break
+		qgetuser v2, type,x,y
+		v1 = cnt*3
+		poke stage,v1,type
+		poke stage,v1+1,x
+		poke stage,v1+2,y
+	loop
+
+	return
